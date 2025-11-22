@@ -1,7 +1,7 @@
 schema_version = "1.0.0"
 
 id = "openbrush_blender_connector"
-version = "0.1"
+version = "0.1.0"
 name = "Open Brush Blender Connector"
 tagline = "Connects Open Brush and Blender APIs via HTTP"
 maintainer = "Icosa Foundation"
