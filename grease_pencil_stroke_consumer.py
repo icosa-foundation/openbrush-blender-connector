@@ -1,5 +1,6 @@
 import bpy
 from .stroke_consumer import BaseStrokeConsumer
+from .brush_mappings import get_brush_mapping
 
 class GreasePencilStrokeConsumer(BaseStrokeConsumer):
     """Consumes stroke commands and creates Grease Pencil strokes in Blender.
@@ -10,8 +11,11 @@ class GreasePencilStrokeConsumer(BaseStrokeConsumer):
             print(f"Skipping path: too few points ({len(self.current_path) if self.current_path else 0})")
             return
         
+        # Get brush mapping for current brush
+        brush_mapping = get_brush_mapping(self.current_brush)
+        
         print(f"Processing stroke with {len(self.current_path)} points")
-        print(f"Brush: {self.current_brush}, Size: {self.current_brush_size}, Color: {self.current_color}")
+        print(f"Brush: {brush_mapping.name} ({self.current_brush}), Size: {self.current_brush_size}, Color: {self.current_color}")
         
         # Find or create a Grease Pencil object
         # Blender 5.0 uses 'GREASEPENCIL' instead of 'GPENCIL'
@@ -23,8 +27,8 @@ class GreasePencilStrokeConsumer(BaseStrokeConsumer):
         
         if gp_obj is None:
             print("Creating new Grease Pencil object")
-            # Blender 5.0 uses grease_pencils_v3
-            gp_data = bpy.data.grease_pencils_v3.new('OpenBrushGP')
+            # Blender 5.0 uses grease_pencils
+            gp_data = bpy.data.grease_pencils.new('OpenBrushGP')
             gp_obj = bpy.data.objects.new('OpenBrushGP', gp_data)
             bpy.context.collection.objects.link(gp_obj)
         
@@ -50,7 +54,7 @@ class GreasePencilStrokeConsumer(BaseStrokeConsumer):
         drawing = frame.drawing
         
         # Create or get material
-        brush_name = self.current_brush or "Fallback"
+        brush_name = brush_mapping.name
         mat_name = f"OpenBrushGP_{brush_name}"
         mat = bpy.data.materials.get(mat_name)
         
@@ -59,10 +63,16 @@ class GreasePencilStrokeConsumer(BaseStrokeConsumer):
             mat = bpy.data.materials.new(mat_name)
             mat.use_nodes = True
             mat.diffuse_color = (*self.current_color, 1.0)
+            
             if mat.node_tree and mat.node_tree.nodes:
                 bsdf = mat.node_tree.nodes.get('Principled BSDF')
                 if bsdf:
                     bsdf.inputs['Base Color'].default_value = (*self.current_color, 1.0)
+                    
+                    # Apply emission if brush mapping specifies it
+                    if brush_mapping.use_emission:
+                        bsdf.inputs['Emission Color'].default_value = (*self.current_color, 1.0)
+                        bsdf.inputs['Emission Strength'].default_value = brush_mapping.emission_strength
         
         # Assign material to object if not already assigned
         if mat.name not in gp_obj.data.materials:
@@ -82,13 +92,32 @@ class GreasePencilStrokeConsumer(BaseStrokeConsumer):
             # Convert from Unity coordinates (Z forward) to Blender (Z up)
             # Unity: X, Y, Z → Blender: X, Z, Y
             stroke.points[i].position = (pt[0], pt[2], pt[1])
-            stroke.points[i].radius = self.current_brush_size * (pt[6] if len(pt) > 6 else 1.0) * 0.01
-            stroke.points[i].vertex_color = (*self.current_color, 1.0)
+            
+            # Apply radius with brush mapping scale
+            base_radius = self.current_brush_size * brush_mapping.radius_scale * 0.01
+            if brush_mapping.use_pressure and len(pt) > 6:
+                stroke.points[i].radius = base_radius * pt[6]
+            else:
+                stroke.points[i].radius = base_radius
+            
+            # Apply vertex color with opacity scale
+            opacity = brush_mapping.opacity_scale
+            stroke.points[i].vertex_color = (*self.current_color, opacity)
+            
+            # Set opacity/strength
+            if hasattr(stroke.points[i], 'opacity'):
+                stroke.points[i].opacity = opacity
+            if hasattr(stroke.points[i], 'strength'):
+                stroke.points[i].strength = brush_mapping.strength_scale
         
         # Set stroke material
         stroke.material_index = mat_index
         
-        print(f"Created Grease Pencil stroke with {len(stroke.points)} points")
+        # TODO: Apply corner_type and cap_mode when API is available
+        # These properties may need to be set via operators or attributes
+        # For now, they use default values
+        
+        print(f"Created Grease Pencil stroke with {len(stroke.points)} points using {brush_mapping.name} brush")
         
         # Force viewport update
         for area in bpy.context.screen.areas:

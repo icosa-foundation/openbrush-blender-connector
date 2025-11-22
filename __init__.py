@@ -18,9 +18,11 @@ from bpy.types import PropertyGroup
 from . import stroke_consumer as stroke_consumer_module
 from . import grease_pencil_stroke_consumer as gp_consumer_module
 from . import curve_stroke_consumer as curve_consumer_module
+from . import brush_mappings as brush_mappings_module
 
 if "bpy" in locals():
     importlib.reload(stroke_consumer_module)
+    importlib.reload(brush_mappings_module)
     importlib.reload(gp_consumer_module)
     importlib.reload(curve_consumer_module)
 
