@@ -7,12 +7,12 @@ Stream your Open Brush drawings directly into Blender in real-time! This addon c
 
 ## Features
 
-✨ **Real-time Streaming** - See your Open Brush strokes appear in Blender instantly  
-🎨 **100+ Brush Support** - All Open Brush brushes mapped with appropriate properties  
-🖌️ **Dual Output Modes** - Choose between Grease Pencil or Bezier Curves  
-🎭 **Brush-Specific Properties** - Each brush has unique corner types, caps, and emission settings  
-⚡ **Pressure Sensitivity** - Pressure data preserved for compatible brushes  
-🌈 **Color Matching** - Stroke colors automatically match your Open Brush palette  
+ **Real-time Streaming** - See your Open Brush strokes appear in Blender instantly  
+ **100+ Brush Support** - All Open Brush brushes mapped with appropriate properties  
+️ **Output Modes** - Choose between Grease Pencil or Bezier Curves  
+ **Brush-Specific Properties** - Each brush has unique corner types, caps, and emission settings  
+ **Pressure Sensitivity** - Pressure data preserved for compatible brushes  
+ **Color Matching** - Stroke colors automatically match your Open Brush palette  
 
 ## Requirements
 
@@ -69,30 +69,11 @@ Switch between modes anytime using the dropdown in the Open Brush panel.
 
 ### Supported Brushes
 
-All 100+ Open Brush brushes are supported with custom properties:
-
-#### Standard Brushes
-- **Ink, Marker, Oil Paint** - Classic drawing tools
-- **Tapered Marker, Thick Paint** - Pressure-sensitive variants
-- **Flat, Paper, Duct Tape** - Textured brushes
-
-#### Emissive Brushes
-- **Light, Fire, Electricity** - Glowing effects with emission
-- **Neon Pulse, Comet** - Animated light effects
-
-#### Special Effects
-- **Hypercolor, Rainbow** - Color-shifting brushes
-- **Disco, Light Wire** - Audio-reactive effects
-- **Bubbles, Smoke, Snow** - Particle-like brushes
-
-#### Experimental Brushes
-- **50+ experimental brushes** including Plasma, Waveform, Keijiro Tube, and more
+TODO
 
 ### Brush Properties
 
 Each brush is configured with:
-- **Corner Type** - Round, Sharp, or Flat stroke corners
-- **Cap Mode** - Round or Flat stroke ends
 - **Radius Scale** - Brush-specific thickness multiplier
 - **Pressure Sensitivity** - Enabled for pressure-responsive brushes
 - **Emission** - Glowing materials for light-based brushes
@@ -181,7 +162,7 @@ Contributions are welcome! Areas for improvement:
 
 ## License
 
-This project is licensed under the Apache License 2.0.
+This project is licensed under the MIT License
 
 ## Credits
 
@@ -193,5 +174,3 @@ This project is licensed under the Apache License 2.0.
 For issues, questions, or feature requests, please open an issue on GitHub.
 
 ---
-
-**Happy Drawing! 🎨✨**
