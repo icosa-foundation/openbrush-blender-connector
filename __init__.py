@@ -11,22 +11,53 @@ import socketserver
 import queue
 import importlib
 from urllib.parse import unquote_plus
+from bpy.props import EnumProperty
+from bpy.types import PropertyGroup
 
 # Import the module with a distinct name to avoid conflict
 from . import stroke_consumer as stroke_consumer_module
 from . import grease_pencil_stroke_consumer as gp_consumer_module
+from . import curve_stroke_consumer as curve_consumer_module
 
 if "bpy" in locals():
     importlib.reload(stroke_consumer_module)
     importlib.reload(gp_consumer_module)
+    importlib.reload(curve_consumer_module)
 
 from .grease_pencil_stroke_consumer import GreasePencilStrokeConsumer
+from .curve_stroke_consumer import CurveStrokeConsumer
 
 PORT = 8080
 httpd = None
 server_thread = None
 stroke_queue = queue.Queue()
-STROKE_CONSUMER_INSTANCE = GreasePencilStrokeConsumer(stroke_queue)
+STROKE_CONSUMER_INSTANCE = None  # Will be set based on preference
+
+def get_stroke_consumer():
+    """Get the appropriate stroke consumer based on user preference."""
+    global STROKE_CONSUMER_INSTANCE
+    
+    if STROKE_CONSUMER_INSTANCE is None or \
+       (bpy.context.scene.openbrush_settings.stroke_type == 'GREASE_PENCIL' and not isinstance(STROKE_CONSUMER_INSTANCE, GreasePencilStrokeConsumer)) or \
+       (bpy.context.scene.openbrush_settings.stroke_type == 'CURVE' and not isinstance(STROKE_CONSUMER_INSTANCE, CurveStrokeConsumer)):
+        
+        if bpy.context.scene.openbrush_settings.stroke_type == 'CURVE':
+            STROKE_CONSUMER_INSTANCE = CurveStrokeConsumer(stroke_queue)
+        else:
+            STROKE_CONSUMER_INSTANCE = GreasePencilStrokeConsumer(stroke_queue)
+    
+    return STROKE_CONSUMER_INSTANCE
+
+class OpenBrushSettings(PropertyGroup):
+    stroke_type: EnumProperty(
+        name="Stroke Type",
+        description="Choose how strokes are created in Blender",
+        items=[
+            ('GREASE_PENCIL', "Grease Pencil", "Create strokes as Grease Pencil objects"),
+            ('CURVE', "Bezier Curves", "Create strokes as 3D Bezier curve objects"),
+        ],
+        default='GREASE_PENCIL',
+    )
 
 class RequestHandler(http.server.SimpleHTTPRequestHandler):
     """HTTP request handler for Blender OpenBrush connector."""
@@ -113,7 +144,8 @@ def stop_http_server():
         server_thread = None
 
 def process_stroke_queue():
-    STROKE_CONSUMER_INSTANCE.process_queue()
+    consumer = get_stroke_consumer()
+    consumer.process_queue()
     return 0.1  # seconds until next call
 
 class HTTP_LISTENER_OT_toggle(bpy.types.Operator):
@@ -173,6 +205,12 @@ class HTTP_LISTENER_PT_panel(bpy.types.Panel):
     def draw(self, context):
         global httpd
         layout = self.layout
+        settings = context.scene.openbrush_settings
+
+        # Stroke type selector
+        layout.prop(settings, "stroke_type", text="Stroke Type")
+        
+        layout.separator()
 
         # Toggle button with dynamic text
         row = layout.row()
@@ -185,6 +223,9 @@ class HTTP_LISTENER_PT_panel(bpy.types.Panel):
         row.operator("http_listener.register")
 
 def register():
+    bpy.utils.register_class(OpenBrushSettings)
+    bpy.types.Scene.openbrush_settings = bpy.props.PointerProperty(type=OpenBrushSettings)
+    
     bpy.utils.register_class(HTTP_LISTENER_OT_toggle)
     bpy.utils.register_class(HTTP_LISTENER_OT_register)
     bpy.utils.register_class(HTTP_LISTENER_PT_panel)
@@ -194,6 +235,10 @@ def unregister():
     bpy.utils.unregister_class(HTTP_LISTENER_OT_toggle)
     bpy.utils.unregister_class(HTTP_LISTENER_OT_register)
     bpy.utils.unregister_class(HTTP_LISTENER_PT_panel)
+    
+    del bpy.types.Scene.openbrush_settings
+    bpy.utils.unregister_class(OpenBrushSettings)
+    
     stop_http_server()
     try:
         bpy.app.timers.unregister(process_stroke_queue)

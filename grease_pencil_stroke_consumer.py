@@ -2,9 +2,8 @@ import bpy
 from .stroke_consumer import BaseStrokeConsumer
 
 class GreasePencilStrokeConsumer(BaseStrokeConsumer):
-    """Consumes stroke commands and creates Grease Pencil strokes in Blender using per-point vertex color.
-    Each brush type uses a unique material; unsupported brushes use a fallback material.
-    Orientation (rx, ry, rz) is parsed but not used; see commented code for future support."""
+    """Consumes stroke commands and creates Grease Pencil strokes in Blender.
+    Compatible with Blender 5.0+ Grease Pencil v3."""
     
     def process_current_path(self) -> None:
         if not self.current_path or len(self.current_path) < 2:
@@ -15,60 +14,81 @@ class GreasePencilStrokeConsumer(BaseStrokeConsumer):
         print(f"Brush: {self.current_brush}, Size: {self.current_brush_size}, Color: {self.current_color}")
         
         # Find or create a Grease Pencil object
+        # Blender 5.0 uses 'GREASEPENCIL' instead of 'GPENCIL'
         gp_obj = None
         for obj in bpy.data.objects:
-            if obj.type == 'GPENCIL':
+            if obj.type == 'GREASEPENCIL':
                 gp_obj = obj
                 break
         
         if gp_obj is None:
             print("Creating new Grease Pencil object")
-            gp_data = bpy.data.grease_pencils.new('OpenBrushGP')
+            # Blender 5.0 uses grease_pencils_v3
+            gp_data = bpy.data.grease_pencils_v3.new('OpenBrushGP')
             gp_obj = bpy.data.objects.new('OpenBrushGP', gp_data)
             bpy.context.collection.objects.link(gp_obj)
         
-        # Get or create a layer
         gp = gp_obj.data
-        if not gp.layers:
-            layer = gp.layers.new('OpenBrushLayer', set_active=True)
-        else:
-            layer = gp.layers.active
         
-        # Get or create frame at current frame
+        # Get or create a layer
+        if not gp.layers:
+            layer = gp.layers.new('OpenBrushLayer')
+        else:
+            layer = gp.layers[0]
+        
+        # Get or create frame
         current_frame = bpy.context.scene.frame_current
-        frame = layer.frames.get(current_frame)
+        frame = None
+        for f in layer.frames:
+            if f.frame_number == current_frame:
+                frame = f
+                break
         if frame is None:
             frame = layer.frames.new(current_frame)
         
-        # Select or create a material for the current brush
+        # In Blender 5.0, frame has a 'drawing' attribute
+        drawing = frame.drawing
+        
+        # Create or get material
         brush_name = self.current_brush or "Fallback"
         mat_name = f"OpenBrushGP_{brush_name}"
-        mat = next((m for m in gp_obj.data.materials if m.name == mat_name), None)
+        mat = bpy.data.materials.get(mat_name)
         
         if mat is None:
             print(f"Creating new material: {mat_name}")
             mat = bpy.data.materials.new(mat_name)
-            # Enable vertex color for the material
-            mat.grease_pencil.show_stroke = True
-            mat.grease_pencil.mode = 'LINE'
-            mat.grease_pencil.color = (*self.current_color, 1.0)
-            mat.grease_pencil.use_stroke_holdout = False
+            mat.use_nodes = True
+            mat.diffuse_color = (*self.current_color, 1.0)
+            if mat.node_tree and mat.node_tree.nodes:
+                bsdf = mat.node_tree.nodes.get('Principled BSDF')
+                if bsdf:
+                    bsdf.inputs['Base Color'].default_value = (*self.current_color, 1.0)
+        
+        # Assign material to object if not already assigned
+        if mat.name not in gp_obj.data.materials:
             gp_obj.data.materials.append(mat)
         
-        # Create a new stroke
-        stroke = frame.strokes.new()
-        stroke.display_mode = '3DSPACE'
-        stroke.line_width = max(10, int(self.current_brush_size * 200))  # Ensure visible width
-        stroke.points.add(count=len(self.current_path))
+        mat_index = gp_obj.data.materials.find(mat.name)
         
+        # Create stroke in the drawing
+        # In Blender 5.0, use add_strokes() method on the drawing object
+        drawing.add_strokes(sizes=(len(self.current_path),))
+        
+        # Get the newly created stroke (it's the last one)
+        stroke = drawing.strokes[-1]
+        
+        # Set point positions and attributes
         for i, pt in enumerate(self.current_path):
-            stroke.points[i].co = (pt[0], pt[1], pt[2])
-            stroke.points[i].pressure = pt[6] if len(pt) > 6 else 1.0
+            # Convert from Unity coordinates (Z forward) to Blender (Z up)
+            # Unity: X, Y, Z → Blender: X, Z, Y
+            stroke.points[i].position = (pt[0], pt[2], pt[1])
+            stroke.points[i].radius = self.current_brush_size * (pt[6] if len(pt) > 6 else 1.0) * 0.01
             stroke.points[i].vertex_color = (*self.current_color, 1.0)
         
-        stroke.material_index = gp_obj.data.materials.find(mat.name)
+        # Set stroke material
+        stroke.material_index = mat_index
         
-        print(f"Created stroke with {len(stroke.points)} points, material index: {stroke.material_index}")
+        print(f"Created Grease Pencil stroke with {len(stroke.points)} points")
         
         # Force viewport update
         for area in bpy.context.screen.areas:
