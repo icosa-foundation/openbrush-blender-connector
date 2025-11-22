@@ -1,41 +1,189 @@
-# __init__.py
 bl_info = {
-    "name": "Icosa Listener",
-    "blender": (4, 0, 0),
-    "description": "Allows Icosa Gallery to import models into Blender",
-    "version": (1, 0),
-    "author": "@icosa.gallery",
+    "name": "HTTP Listener",
+    "blender": (3, 4, 0),
+    "category": "System",
 }
-
 import bpy
-from bpy.app.handlers import persistent
 import threading
-import os
+import json
+import http.server
+import socketserver
+import queue
+import importlib
 
-# Import the server module
-from .server import ModelImportServer
+# Import the module with a distinct name to avoid conflict
+from . import stroke_consumer as stroke_consumer_module
 
-# Global reference to server instance
-server_instance = None
+if "bpy" in locals():
+    importlib.reload(stroke_consumer_module)
 
-@persistent
-def load_handler(dummy):
-    """Restart server when loading new blend files"""
-    global server_instance
-    if server_instance:
-        server_instance.restart()
+from .stroke_consumer import BaseStrokeConsumer
+
+PORT = 8080
+httpd = None
+server_thread = None
+stroke_queue = queue.Queue()
+STROKE_CONSUMER_INSTANCE = BaseStrokeConsumer(stroke_queue)
+
+class RequestHandler(http.server.SimpleHTTPRequestHandler):
+    """HTTP request handler for Blender OpenBrush connector."""
+
+    def handle_action(self, action: str, params: dict = None, payload: str = None) -> dict:
+        """Dispatches actions to the appropriate handler."""
+        if action == 'render':
+            bpy.ops.render.render(animation=True)
+            return {'status': 'success'}
+        if action == 'stroke' and payload:
+            stroke_queue.put(payload)
+            return {'status': 'queued'}
+        return {'status': 'unknown_action', 'action': action}
+
+    def handle_request(self, action: str, params: dict, payload: str = None) -> dict:
+        """Handles incoming requests by delegating to handle_action."""
+        return self.handle_action(action, params, payload) if action else {'status': 'no_action'}
+
+    def do_POST(self):
+        """Handles POST requests with JSON payload."""
+        try:
+            content_length = int(self.headers['Content-Length'])
+            post_data = self.rfile.read(content_length)
+            data = json.loads(post_data)
+            action = data.get('action')
+            params = data if isinstance(data, dict) else {}
+            payload = data.get('payload')
+            result = self.handle_request(action, params, payload)
+        except Exception as e:
+            result = {'status': 'error', 'message': str(e)}
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json')
+        self.end_headers()
+        self.wfile.write(json.dumps(result).encode('utf-8'))
+
+    def do_GET(self):
+        """Handles GET requests with URL parameters."""
+        from urllib.parse import urlparse, parse_qs, unquote
+        try:
+            parsed_path = urlparse(self.path)
+            action = parsed_path.path.lstrip('/')
+            params = {k: v[0] if len(v) == 1 else v for k, v in parse_qs(parsed_path.query).items()}
+            payload = unquote(parsed_path.query) if parsed_path.query else None
+            if payload and payload.startswith('?'):
+                payload = payload[1:]
+            result = self.handle_request(action, params, payload)
+        except Exception as e:
+            result = {'status': 'error', 'message': str(e)}
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json')
+        self.end_headers()
+        self.wfile.write(json.dumps(result).encode('utf-8'))
+
+
+def start_http_server():
+    global httpd, server_thread
+
+    if httpd is None:
+        handler = RequestHandler
+        httpd = socketserver.TCPServer(("", PORT), handler)
+        server_thread = threading.Thread(target=httpd.serve_forever)
+        server_thread.start()
+
+def stop_http_server():
+    global httpd, server_thread
+
+    if httpd is not None:
+        httpd.shutdown()
+        httpd.server_close()
+        server_thread.join()
+        httpd = None
+        server_thread = None
+
+def process_stroke_queue():
+    STROKE_CONSUMER_INSTANCE.process_queue()
+    return 0.1  # seconds until next call
+
+class HTTP_LISTENER_OT_toggle(bpy.types.Operator):
+    bl_idname = "http_listener.toggle"
+    bl_label = "Start Listener"
+
+    def execute(self, context):
+        global httpd
+        
+        if httpd is None:
+            # Start the server
+            start_http_server()
+            self.report({'INFO'}, "HTTP Listener started on port {}".format(PORT))
+        else:
+            # Stop the server
+            stop_http_server()
+            self.report({'INFO'}, "HTTP Listener stopped")
+        
+        return {'FINISHED'}
+
+class HTTP_LISTENER_OT_register(bpy.types.Operator):
+    bl_idname = "http_listener.register"
+    bl_label = "Register with Open Brush"
+
+    def execute(self, context):
+        import urllib.request
+        import urllib.error
+        try:
+            # Register this Blender instance with Open Brush
+            url = f"http://localhost:40074/api/v1?listenfor.strokes=http://localhost:{PORT}/"
+            response = urllib.request.urlopen(url, timeout=5)
+            
+            if response.status == 200:
+                self.report({'INFO'}, "Successfully registered with Open Brush")
+            else:
+                self.report({'WARNING'}, f"Open Brush responded with status {response.status}")
+            
+        except urllib.error.URLError as e:
+            if hasattr(e, 'reason'):
+                self.report({'ERROR'}, f"Failed to connect to Open Brush: {e.reason}")
+            elif hasattr(e, 'code'):
+                self.report({'ERROR'}, f"Open Brush returned error code: {e.code}")
+            else:
+                self.report({'ERROR'}, f"Failed to register: {str(e)}")
+        except Exception as e:
+            self.report({'ERROR'}, f"Unexpected error: {str(e)}")
+        
+        return {'FINISHED'}
+
+class HTTP_LISTENER_PT_panel(bpy.types.Panel):
+    bl_label = "HTTP Listener"
+    bl_idname = "HTTP_LISTENER_PT_panel"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = 'Open Brush'
+
+    def draw(self, context):
+        global httpd
+        layout = self.layout
+
+        # Toggle button with dynamic text
+        row = layout.row()
+        if httpd is not None:
+            row.operator("http_listener.toggle", text="Stop Listener", depress=True)
+        else:
+            row.operator("http_listener.toggle", text="Start Listener")
+
+        row = layout.row()
+        row.operator("http_listener.register")
 
 def register():
-    global server_instance
-    server_instance = ModelImportServer()
-    server_instance.start()
-    bpy.app.handlers.load_post.append(load_handler)
+    bpy.utils.register_class(HTTP_LISTENER_OT_toggle)
+    bpy.utils.register_class(HTTP_LISTENER_OT_register)
+    bpy.utils.register_class(HTTP_LISTENER_PT_panel)
+    bpy.app.timers.register(process_stroke_queue)
 
 def unregister():
-    global server_instance
-    if server_instance:
-        server_instance.stop()
-    bpy.app.handlers.load_post.remove(load_handler)
+    bpy.utils.unregister_class(HTTP_LISTENER_OT_toggle)
+    bpy.utils.unregister_class(HTTP_LISTENER_OT_register)
+    bpy.utils.unregister_class(HTTP_LISTENER_PT_panel)
+    stop_http_server()
+    try:
+        bpy.app.timers.unregister(process_stroke_queue)
+    except Exception:
+        pass
 
 if __name__ == "__main__":
     register()
