@@ -10,20 +10,23 @@ import http.server
 import socketserver
 import queue
 import importlib
+from urllib.parse import unquote_plus
 
 # Import the module with a distinct name to avoid conflict
 from . import stroke_consumer as stroke_consumer_module
+from . import grease_pencil_stroke_consumer as gp_consumer_module
 
 if "bpy" in locals():
     importlib.reload(stroke_consumer_module)
+    importlib.reload(gp_consumer_module)
 
-from .stroke_consumer import BaseStrokeConsumer
+from .grease_pencil_stroke_consumer import GreasePencilStrokeConsumer
 
 PORT = 8080
 httpd = None
 server_thread = None
 stroke_queue = queue.Queue()
-STROKE_CONSUMER_INSTANCE = BaseStrokeConsumer(stroke_queue)
+STROKE_CONSUMER_INSTANCE = GreasePencilStrokeConsumer(stroke_queue)
 
 class RequestHandler(http.server.SimpleHTTPRequestHandler):
     """HTTP request handler for Blender OpenBrush connector."""
@@ -43,17 +46,25 @@ class RequestHandler(http.server.SimpleHTTPRequestHandler):
         return self.handle_action(action, params, payload) if action else {'status': 'no_action'}
 
     def do_POST(self):
-        """Handles POST requests with JSON payload."""
+        """Handles POST requests with URL-encoded stroke data."""
         try:
             content_length = int(self.headers['Content-Length'])
             post_data = self.rfile.read(content_length)
-            data = json.loads(post_data)
-            action = data.get('action')
-            params = data if isinstance(data, dict) else {}
-            payload = data.get('payload')
-            result = self.handle_request(action, params, payload)
+            
+            # Decode URL-encoded data
+            decoded_data = unquote_plus(post_data.decode('utf-8'))
+            print(f"Decoded POST data: {decoded_data}")
+            
+            # Queue the command for the stroke consumer
+            stroke_queue.put(decoded_data)
+            result = {'status': 'queued'}
+            
         except Exception as e:
+            print(f"POST error: {e}")
+            import traceback
+            traceback.print_exc()
             result = {'status': 'error', 'message': str(e)}
+        
         self.send_response(200)
         self.send_header('Content-Type', 'application/json')
         self.end_headers()
@@ -64,13 +75,17 @@ class RequestHandler(http.server.SimpleHTTPRequestHandler):
         from urllib.parse import urlparse, parse_qs, unquote
         try:
             parsed_path = urlparse(self.path)
-            action = parsed_path.path.lstrip('/')
-            params = {k: v[0] if len(v) == 1 else v for k, v in parse_qs(parsed_path.query).items()}
-            payload = unquote(parsed_path.query) if parsed_path.query else None
-            if payload and payload.startswith('?'):
-                payload = payload[1:]
-            result = self.handle_request(action, params, payload)
+            query_string = parsed_path.query
+            
+            print(f"GET query: {query_string}")
+            
+            # Queue the command directly for the stroke consumer
+            if query_string:
+                stroke_queue.put(query_string)
+            
+            result = {'status': 'success'}
         except Exception as e:
+            print(f"GET error: {e}")
             result = {'status': 'error', 'message': str(e)}
         self.send_response(200)
         self.send_header('Content-Type', 'application/json')
